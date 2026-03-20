@@ -7,6 +7,7 @@ const {
 const { Boom } = require("@hapi/boom");
 const pino = require("pino");
 const path = require("path");
+const qrcode = require("qrcode-terminal");
 
 const SESSION_PATH = path.join(__dirname, "..", "sessions");
 
@@ -23,7 +24,7 @@ async function conectarWhatsApp() {
   sock = makeWASocket({
     version,
     auth: state,
-    printQRInTerminal: true, // QR code aparece direto no terminal!
+    printQRInTerminal: false, // gerenciamos o QR manualmente abaixo
     logger: pino({ level: "silent" }), // silencia logs internos do Baileys
     browser: ["Mestre da Obra Bot", "Chrome", "1.0.0"],
     connectTimeoutMs: 60_000,
@@ -39,7 +40,11 @@ async function conectarWhatsApp() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      console.log("\n📱 ESCANEIE O QR CODE ACIMA COM O WHATSAPP DA LOJA!\n");
+      console.log("\n========================================");
+      console.log("📱 ESCANEIE O QR CODE COM O WHATSAPP DA LOJA:");
+      console.log("========================================\n");
+      qrcode.generate(qr, { small: true });
+      console.log("\n========================================\n");
     }
 
     if (connection === "close") {
