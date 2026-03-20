@@ -26,7 +26,7 @@ async function conectarWhatsApp() {
     auth: state,
     printQRInTerminal: false, // gerenciamos o QR manualmente abaixo
     logger: pino({ level: "silent" }), // silencia logs internos do Baileys
-    browser: ["Mestre da Obra Bot", "Chrome", "1.0.0"],
+    browser: ["Ubuntu", "Chrome", "124.0.0"],
     connectTimeoutMs: 60_000,
     defaultQueryTimeoutMs: 60_000,
     keepAliveIntervalMs: 30_000,
