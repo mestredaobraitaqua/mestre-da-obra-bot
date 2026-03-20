@@ -1,10 +1,11 @@
 require("dotenv").config();
 const express = require("express");
 const {
+  conectarWhatsApp,
+  definirHandlerMensagem,
   enviarMensagem,
-  enviarMensagemComBotoes,
   marcarComoLida,
-  extrairMensagem,
+  extrairDadosMensagem,
 } = require("./whatsapp");
 const { processarMensagem } = require("./ai");
 const {
@@ -21,30 +22,11 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 // =============================================================
-// ROTA DE VERIFICAÇÃO (compatibilidade Meta — mantida por segurança)
+// HANDLER: PROCESSA CADA MENSAGEM RECEBIDA PELO WHATSAPP
 // =============================================================
-app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
-    console.log("[Webhook] Verificado com sucesso!");
-    return res.status(200).send(challenge);
-  }
-
-  return res.sendStatus(403);
-});
-
-// =============================================================
-// ROTA PRINCIPAL: RECEBE MENSAGENS DA EVOLUTION API
-// =============================================================
-app.post("/webhook", async (req, res) => {
-  // Responde 200 imediatamente para a Evolution API não reenviar
-  res.sendStatus(200);
-
+definirHandlerMensagem(async (msg) => {
   try {
-    const mensagem = extrairMensagem(req.body);
+    const mensagem = extrairDadosMensagem(msg);
     if (!mensagem) return;
 
     const { messageKey, de, nome, texto } = mensagem;
@@ -87,21 +69,10 @@ Motivo: ${motivoTransferencia}
 Hora: ${new Date().toLocaleString("pt-BR")}
 ========================================`);
     } else {
-      // Resposta normal do bot
       await enviarMensagem(de, resposta);
     }
   } catch (error) {
-    console.error("[Erro no webhook]:", error.message);
-
-    try {
-      const mensagem = extrairMensagem(req.body);
-      if (mensagem?.de) {
-        await enviarMensagem(
-          mensagem.de,
-          "Desculpe, ocorreu um problema técnico. Tente novamente em instantes ou ligue para a loja. 🙏"
-        );
-      }
-    } catch (_) {}
+    console.error("[Erro ao processar mensagem]:", error.message);
   }
 });
 
@@ -116,7 +87,9 @@ app.get("/", (req, res) => {
   });
 });
 
-// Inicia o servidor
+// =============================================================
+// INICIA O SERVIDOR E CONECTA AO WHATSAPP
+// =============================================================
 app.listen(PORT, () => {
   console.log(`
 ====================================
@@ -124,4 +97,9 @@ app.listen(PORT, () => {
 🌐 Porta: ${PORT}
 ⏰ ${new Date().toLocaleString("pt-BR")}
 ====================================`);
+});
+
+conectarWhatsApp().catch((err) => {
+  console.error("[Erro crítico ao conectar WhatsApp]:", err.message);
+  process.exit(1);
 });

@@ -1,118 +1,147 @@
-const axios = require("axios");
+const {
+  default: makeWASocket,
+  DisconnectReason,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+} = require("@whiskeysockets/baileys");
+const { Boom } = require("@hapi/boom");
+const pino = require("pino");
+const path = require("path");
 
-const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL || "http://136.248.91.8:8080";
-const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || "mestrebot123456";
-const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || "mestre-da-obra";
+const SESSION_PATH = path.join(__dirname, "..", "sessions");
 
-// Envia mensagem de texto simples via Evolution API
-async function enviarMensagem(para, texto) {
-  try {
-    // Remove sufixos do WhatsApp se existirem
-    const numero = para.replace("@s.whatsapp.net", "").replace("@c.us", "");
+let sock = null;
+let onMensagemRecebida = null;
 
-    const response = await axios.post(
-      `${EVOLUTION_API_URL}/message/sendText/${EVOLUTION_INSTANCE}`,
-      {
-        number: numero,
-        text: texto,
-      },
-      {
-        headers: {
-          apikey: EVOLUTION_API_KEY,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-    console.log(`[WhatsApp] Mensagem enviada para ${numero}`);
-    return response.data;
-  } catch (error) {
-    console.error(
-      "[WhatsApp] Erro ao enviar mensagem:",
-      error.response?.data || error.message
-    );
-    throw error;
-  }
-}
+// =============================================================
+// CONEXÃO COM WHATSAPP VIA BAILEYS (direto, sem Evolution API)
+// =============================================================
+async function conectarWhatsApp() {
+  const { state, saveCreds } = await useMultiFileAuthState(SESSION_PATH);
+  const { version } = await fetchLatestBaileysVersion();
 
-// Envia mensagem com opções numeradas (Evolution API não suporta botões interativos)
-async function enviarMensagemComBotoes(para, texto, botoes) {
-  const textoComOpcoes =
-    texto + "\n\n" + botoes.map((b, i) => `${i + 1}. ${b.titulo}`).join("\n");
-  return enviarMensagem(para, textoComOpcoes);
-}
+  sock = makeWASocket({
+    version,
+    auth: state,
+    printQRInTerminal: true, // QR code aparece direto no terminal!
+    logger: pino({ level: "silent" }), // silencia logs internos do Baileys
+    browser: ["Mestre da Obra Bot", "Chrome", "1.0.0"],
+    connectTimeoutMs: 60_000,
+    defaultQueryTimeoutMs: 60_000,
+    keepAliveIntervalMs: 30_000,
+  });
 
-// Marca mensagem como lida na Evolution API
-async function marcarComoLida(messageKey) {
-  try {
-    await axios.post(
-      `${EVOLUTION_API_URL}/chat/markMessageAsRead/${EVOLUTION_INSTANCE}`,
-      { readMessages: [messageKey] },
-      {
-        headers: {
-          apikey: EVOLUTION_API_KEY,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-  } catch (error) {
-    // Não crítico — ignora silenciosamente
-  }
-}
+  // Salva as credenciais sempre que atualizar
+  sock.ev.on("creds.update", saveCreds);
 
-// Extrai dados da mensagem recebida pelo webhook da Evolution API
-function extrairMensagem(body) {
-  try {
-    // Só processa eventos de novas mensagens
-    if (body.event !== "messages.upsert") return null;
+  // Gerencia estado da conexão
+  sock.ev.on("connection.update", (update) => {
+    const { connection, lastDisconnect, qr } = update;
 
-    const data = body.data;
-    if (!data) return null;
-
-    // Ignora mensagens enviadas pelo próprio bot
-    if (data.key?.fromMe) return null;
-
-    const remoteJid = data.key?.remoteJid;
-    if (!remoteJid) return null;
-
-    // Extrai o número de telefone
-    const de = remoteJid
-      .replace("@s.whatsapp.net", "")
-      .replace("@c.us", "");
-
-    // Extrai texto de diferentes tipos de mensagem
-    let texto = null;
-    const msg = data.message;
-    if (!msg) return null;
-
-    if (msg.conversation) {
-      texto = msg.conversation;
-    } else if (msg.extendedTextMessage?.text) {
-      texto = msg.extendedTextMessage.text;
-    } else if (msg.buttonsResponseMessage?.selectedDisplayText) {
-      texto = msg.buttonsResponseMessage.selectedDisplayText;
-    } else if (msg.listResponseMessage?.title) {
-      texto = msg.listResponseMessage.title;
+    if (qr) {
+      console.log("\n📱 ESCANEIE O QR CODE ACIMA COM O WHATSAPP DA LOJA!\n");
     }
 
-    if (!texto) return null;
+    if (connection === "close") {
+      const codigo = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      const deslogado = codigo === DisconnectReason.loggedOut;
 
-    return {
-      messageId: data.key?.id,
-      messageKey: data.key,
-      de: de,
-      nome: data.pushName || "Cliente",
-      texto: texto.trim(),
-      timestamp: data.messageTimestamp,
-    };
-  } catch (error) {
-    console.error("[WhatsApp] Erro ao extrair mensagem:", error.message);
-    return null;
+      if (deslogado) {
+        console.log(
+          "[WhatsApp] ⚠️  Sessão encerrada (logout). Delete a pasta sessions/ e reinicie."
+        );
+      } else {
+        console.log(
+          `[WhatsApp] Conexão encerrada (código ${codigo}). Reconectando em 5s...`
+        );
+        setTimeout(conectarWhatsApp, 5000);
+      }
+    } else if (connection === "open") {
+      console.log("[WhatsApp] ✅ Conectado com sucesso!");
+    }
+  });
+
+  // Recebe mensagens
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (type !== "notify") return;
+
+    for (const msg of messages) {
+      if (msg.key.fromMe) continue; // ignora mensagens enviadas pelo bot
+
+      if (onMensagemRecebida) {
+        try {
+          await onMensagemRecebida(msg);
+        } catch (err) {
+          console.error("[WhatsApp] Erro ao processar mensagem:", err.message);
+        }
+      }
+    }
+  });
+}
+
+// Define o handler para mensagens recebidas
+function definirHandlerMensagem(handler) {
+  onMensagemRecebida = handler;
+}
+
+// Envia mensagem de texto
+async function enviarMensagem(para, texto) {
+  if (!sock) throw new Error("WhatsApp não conectado");
+  const jid = para.includes("@") ? para : `${para}@s.whatsapp.net`;
+  await sock.sendMessage(jid, { text: texto });
+  console.log(`[WhatsApp] Mensagem enviada para ${para}`);
+}
+
+// Marca mensagem como lida
+async function marcarComoLida(key) {
+  if (!sock) return;
+  try {
+    await sock.readMessages([key]);
+  } catch (_) {}
+}
+
+// Extrai os dados relevantes de uma mensagem Baileys
+function extrairDadosMensagem(msg) {
+  const remoteJid = msg.key?.remoteJid;
+  if (!remoteJid) return null;
+
+  // Ignora grupos
+  if (remoteJid.endsWith("@g.us")) return null;
+
+  const de = remoteJid.replace("@s.whatsapp.net", "");
+  const nome = msg.pushName || "Cliente";
+
+  const m = msg.message;
+  if (!m) return null;
+
+  let texto = null;
+  if (m.conversation) {
+    texto = m.conversation;
+  } else if (m.extendedTextMessage?.text) {
+    texto = m.extendedTextMessage.text;
+  } else if (m.buttonsResponseMessage?.selectedDisplayText) {
+    texto = m.buttonsResponseMessage.selectedDisplayText;
+  } else if (m.listResponseMessage?.title) {
+    texto = m.listResponseMessage.title;
+  } else if (m.imageMessage?.caption) {
+    texto = m.imageMessage.caption;
   }
+
+  if (!texto) return null;
+
+  return {
+    messageKey: msg.key,
+    de,
+    nome,
+    texto: texto.trim(),
+    timestamp: msg.messageTimestamp,
+  };
 }
 
 module.exports = {
+  conectarWhatsApp,
+  definirHandlerMensagem,
   enviarMensagem,
-  enviarMensagemComBotoes,
   marcarComoLida,
-  extrairMensagem,
+  extrairDadosMensagem,
 };
