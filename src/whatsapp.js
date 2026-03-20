@@ -23,7 +23,7 @@ async function enviarMensagem(para, texto) {
         },
       }
     );
-    console.log(`[WhatsApp] Mensagem enviada para ${para}`);
+    console.log(`[WhatsApp] Mensagem enviada para ${para}:`, JSON.stringify(response.data));
     return response.data;
   } catch (error) {
     console.error("[WhatsApp] Erro ao enviar mensagem:", error.response?.data || error.message);
