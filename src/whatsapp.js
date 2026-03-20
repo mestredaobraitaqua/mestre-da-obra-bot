@@ -1,86 +1,55 @@
 const axios = require("axios");
 
-const WHATSAPP_API_URL = "https://graph.facebook.com/v21.0";
-const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
-const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL || "http://136.248.91.8:8080";
+const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || "mestrebot123456";
+const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || "mestre-da-obra";
 
-// Envia mensagem de texto simples
+// Envia mensagem de texto simples via Evolution API
 async function enviarMensagem(para, texto) {
   try {
+    // Remove sufixos do WhatsApp se existirem
+    const numero = para.replace("@s.whatsapp.net", "").replace("@c.us", "");
+
     const response = await axios.post(
-      `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
+      `${EVOLUTION_API_URL}/message/sendText/${EVOLUTION_INSTANCE}`,
       {
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: para,
-        type: "text",
-        text: { body: texto },
+        number: numero,
+        text: texto,
       },
       {
         headers: {
-          Authorization: `Bearer ${ACCESS_TOKEN}`,
+          apikey: EVOLUTION_API_KEY,
           "Content-Type": "application/json",
         },
       }
     );
-    console.log(`[WhatsApp] Mensagem enviada para ${para}:`, JSON.stringify(response.data));
+    console.log(`[WhatsApp] Mensagem enviada para ${numero}`);
     return response.data;
   } catch (error) {
-    console.error("[WhatsApp] Erro ao enviar mensagem:", error.response?.data || error.message);
+    console.error(
+      "[WhatsApp] Erro ao enviar mensagem:",
+      error.response?.data || error.message
+    );
     throw error;
   }
 }
 
-// Envia mensagem com botões (ex: "Falar com atendente" / "Continuar com bot")
+// Envia mensagem com opções numeradas (Evolution API não suporta botões interativos)
 async function enviarMensagemComBotoes(para, texto, botoes) {
-  try {
-    const response = await axios.post(
-      `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: para,
-        type: "interactive",
-        interactive: {
-          type: "button",
-          body: { text: texto },
-          action: {
-            buttons: botoes.map((btn, idx) => ({
-              type: "reply",
-              reply: { id: btn.id || `btn_${idx}`, title: btn.titulo },
-            })),
-          },
-        },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${ACCESS_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-    console.log(`[WhatsApp] Mensagem com botões enviada para ${para}`);
-    return response.data;
-  } catch (error) {
-    // Se botões falharem, envia texto simples como fallback
-    console.warn("[WhatsApp] Botões falharam, enviando texto simples");
-    return enviarMensagem(para, texto);
-  }
+  const textoComOpcoes =
+    texto + "\n\n" + botoes.map((b, i) => `${i + 1}. ${b.titulo}`).join("\n");
+  return enviarMensagem(para, textoComOpcoes);
 }
 
-// Marca mensagem como lida
-async function marcarComoLida(messageId) {
+// Marca mensagem como lida na Evolution API
+async function marcarComoLida(messageKey) {
   try {
     await axios.post(
-      `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: "whatsapp",
-        status: "read",
-        message_id: messageId,
-      },
+      `${EVOLUTION_API_URL}/chat/markMessageAsRead/${EVOLUTION_INSTANCE}`,
+      { readMessages: [messageKey] },
       {
         headers: {
-          Authorization: `Bearer ${ACCESS_TOKEN}`,
+          apikey: EVOLUTION_API_KEY,
           "Content-Type": "application/json",
         },
       }
@@ -90,37 +59,50 @@ async function marcarComoLida(messageId) {
   }
 }
 
-// Extrai dados da mensagem recebida pelo webhook
+// Extrai dados da mensagem recebida pelo webhook da Evolution API
 function extrairMensagem(body) {
   try {
-    const entry = body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
+    // Só processa eventos de novas mensagens
+    if (body.event !== "messages.upsert") return null;
 
-    if (!value?.messages?.[0]) return null;
+    const data = body.data;
+    if (!data) return null;
 
-    const message = value.messages[0];
-    const contact = value.contacts?.[0];
+    // Ignora mensagens enviadas pelo próprio bot
+    if (data.key?.fromMe) return null;
 
-    // Suporte a texto e botões interativos
+    const remoteJid = data.key?.remoteJid;
+    if (!remoteJid) return null;
+
+    // Extrai o número de telefone
+    const de = remoteJid
+      .replace("@s.whatsapp.net", "")
+      .replace("@c.us", "");
+
+    // Extrai texto de diferentes tipos de mensagem
     let texto = null;
-    if (message.type === "text") {
-      texto = message.text?.body;
-    } else if (message.type === "interactive") {
-      texto = message.interactive?.button_reply?.title ||
-               message.interactive?.list_reply?.title;
-    } else if (message.type === "button") {
-      texto = message.button?.text;
+    const msg = data.message;
+    if (!msg) return null;
+
+    if (msg.conversation) {
+      texto = msg.conversation;
+    } else if (msg.extendedTextMessage?.text) {
+      texto = msg.extendedTextMessage.text;
+    } else if (msg.buttonsResponseMessage?.selectedDisplayText) {
+      texto = msg.buttonsResponseMessage.selectedDisplayText;
+    } else if (msg.listResponseMessage?.title) {
+      texto = msg.listResponseMessage.title;
     }
 
     if (!texto) return null;
 
     return {
-      messageId: message.id,
-      de: message.from, // número do cliente (ex: "5511999999999")
-      nome: contact?.profile?.name || "Cliente",
+      messageId: data.key?.id,
+      messageKey: data.key,
+      de: de,
+      nome: data.pushName || "Cliente",
       texto: texto.trim(),
-      timestamp: message.timestamp,
+      timestamp: data.messageTimestamp,
     };
   } catch (error) {
     console.error("[WhatsApp] Erro ao extrair mensagem:", error.message);

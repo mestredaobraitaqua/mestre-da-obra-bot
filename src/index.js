@@ -19,42 +19,40 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
 
 // =============================================================
-// ROTA DE VERIFICAÇÃO DO WEBHOOK (Meta exige isso na configuração)
+// ROTA DE VERIFICAÇÃO (compatibilidade Meta — mantida por segurança)
 // =============================================================
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+  if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
     console.log("[Webhook] Verificado com sucesso!");
     return res.status(200).send(challenge);
   }
 
-  console.error("[Webhook] Falha na verificação. Token inválido.");
   return res.sendStatus(403);
 });
 
 // =============================================================
-// ROTA PRINCIPAL: RECEBE MENSAGENS DO WHATSAPP
+// ROTA PRINCIPAL: RECEBE MENSAGENS DA EVOLUTION API
 // =============================================================
 app.post("/webhook", async (req, res) => {
-  // Responde 200 imediatamente para o Meta não reenviar
+  // Responde 200 imediatamente para a Evolution API não reenviar
   res.sendStatus(200);
 
   try {
     const mensagem = extrairMensagem(req.body);
     if (!mensagem) return;
 
-    const { messageId, de, nome, texto } = mensagem;
+    const { messageKey, de, nome, texto } = mensagem;
 
     console.log(`[Mensagem recebida] ${nome} (${de}): ${texto}`);
 
     // Marca como lida no WhatsApp
-    await marcarComoLida(messageId);
+    await marcarComoLida(messageKey);
 
     // Verifica se cliente está aguardando atendimento humano
     const aguardando = await clienteAguardandoHumano(de);
@@ -79,11 +77,8 @@ app.post("/webhook", async (req, res) => {
     // Se precisa transferir para humano
     if (precisaTransferir) {
       await marcarParaHumano(de, motivoTransferencia);
-
-      // Envia resposta da IA + botão de confirmação
       await enviarMensagem(de, resposta);
 
-      // Notifica a equipe (log por enquanto — futuramente pode ser Telegram/email)
       console.log(`
 ========================================
 🚨 TRANSFERÊNCIA PARA HUMANO
@@ -98,7 +93,6 @@ Hora: ${new Date().toLocaleString("pt-BR")}
   } catch (error) {
     console.error("[Erro no webhook]:", error.message);
 
-    // Tenta informar o cliente que houve um problema
     try {
       const mensagem = extrairMensagem(req.body);
       if (mensagem?.de) {
@@ -112,7 +106,7 @@ Hora: ${new Date().toLocaleString("pt-BR")}
 });
 
 // =============================================================
-// ROTA DE SAÚDE: verifica se o servidor está rodando
+// ROTA DE SAÚDE
 // =============================================================
 app.get("/", (req, res) => {
   res.json({
