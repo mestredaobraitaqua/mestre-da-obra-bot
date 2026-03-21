@@ -20,6 +20,7 @@ if (faltando.length > 0) {
 }
 
 const express = require("express");
+const QRCode = require("qrcode");
 const {
   conectarWhatsApp,
   definirHandlerMensagem,
@@ -28,6 +29,7 @@ const {
   mostrarDigitando,
   pararDigitando,
   extrairDadosMensagem,
+  obterQRCode,
 } = require("./whatsapp");
 const { processarMensagem } = require("./ai");
 const { transcreverAudio } = require("./groq");
@@ -195,6 +197,28 @@ app.get("/", (req, res) => {
     app: "Mestre da Obra Bot",
     hora: new Date().toLocaleString("pt-BR"),
   });
+});
+
+// =============================================================
+// ROTA QR CODE — fallback para vinculação manual
+// =============================================================
+app.get("/qr", async (req, res) => {
+  const qr = obterQRCode();
+  if (!qr) {
+    return res.send(`<!DOCTYPE html><html><body style="font-family:sans-serif;text-align:center;padding:50px;background:#f0f0f0">
+      <h2 style="color:green">WhatsApp Conectado</h2>
+      <p>O bot esta online. Nenhuma acao necessaria.</p>
+      <script>setTimeout(()=>location.reload(),15000)</script>
+    </body></html>`);
+  }
+  const qrImage = await QRCode.toDataURL(qr);
+  res.send(`<!DOCTYPE html><html><body style="font-family:sans-serif;text-align:center;padding:50px;background:#f0f0f0">
+    <h2 style="color:#e53935">Vinculacao necessaria</h2>
+    <p>Abra o WhatsApp da loja > Menu > Dispositivos Vinculados > Vincular dispositivo</p>
+    <img src="${qrImage}" style="width:280px;height:280px;border:8px solid white;border-radius:12px"/>
+    <p style="color:#666;font-size:14px">Esta pagina atualiza automaticamente a cada 20 segundos</p>
+    <script>setTimeout(()=>location.reload(),20000)</script>
+  </body></html>`);
 });
 
 // =============================================================

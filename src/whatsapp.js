@@ -8,12 +8,14 @@ const {
 const { Boom } = require("@hapi/boom");
 const pino = require("pino");
 const path = require("path");
-const qrcode = require("qrcode-terminal");
+const fs = require("fs");
 
 const SESSION_PATH = path.join(__dirname, "..", "sessions");
 
 let sock = null;
 let onMensagemRecebida = null;
+let qrCodeAtual = null;
+let solicitandoPairCode = false;
 
 // =============================================================
 // CONEXÃO COM WHATSAPP VIA BAILEYS
@@ -21,6 +23,7 @@ let onMensagemRecebida = null;
 async function conectarWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_PATH);
   const { version } = await fetchLatestBaileysVersion();
+  const temSessao = !!state?.creds?.registered;
 
   sock = makeWASocket({
     version,
@@ -35,28 +38,49 @@ async function conectarWhatsApp() {
 
   sock.ev.on("creds.update", saveCreds);
 
+  // Solicita pair code automaticamente quando não há sessão salva
+  if (!temSessao && !solicitandoPairCode) {
+    solicitandoPairCode = true;
+    setTimeout(async () => {
+      try {
+        const numero = (process.env.NUMERO_PAULO || "").replace(/\D/g, "");
+        if (numero) {
+          const codigo = await sock.requestPairingCode(numero);
+          console.log("\n========================================");
+          console.log(`CODIGO DE VINCULACAO WHATSAPP: ${codigo}`);
+          console.log("Abra seu WhatsApp > Configuracoes > Dispositivos Vinculados > Vincular");
+          console.log("========================================\n");
+        }
+      } catch (err) {
+        console.error("[WhatsApp] Par code nao disponivel, aguardando QR:", err.message);
+      }
+      solicitandoPairCode = false;
+    }, 3000);
+  }
+
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      console.log("\n========================================");
-      console.log("ESCANEIE O QR CODE COM O WHATSAPP DA LOJA:");
-      console.log("========================================\n");
-      qrcode.generate(qr, { small: true });
-      console.log("\n========================================\n");
+      qrCodeAtual = qr;
+      console.log("[WhatsApp] QR disponivel em http://SEU_IP:3000/qr");
     }
 
     if (connection === "close") {
+      qrCodeAtual = null;
       const codigo = new Boom(lastDisconnect?.error)?.output?.statusCode;
       const deslogado = codigo === DisconnectReason.loggedOut;
 
       if (deslogado) {
-        console.log("[WhatsApp] Sessao encerrada (logout). Delete a pasta sessions/ e reinicie.");
+        console.log("[WhatsApp] Sessao invalidada pelo WhatsApp. Limpando e reconectando automaticamente...");
+        try { fs.rmSync(SESSION_PATH, { recursive: true, force: true }); } catch (_) {}
+        setTimeout(conectarWhatsApp, 3000);
       } else {
         console.log(`[WhatsApp] Conexao encerrada (codigo ${codigo}). Reconectando em 5s...`);
         setTimeout(conectarWhatsApp, 5000);
       }
     } else if (connection === "open") {
+      qrCodeAtual = null;
       console.log("[WhatsApp] Conectado com sucesso.");
     }
   });
@@ -198,6 +222,10 @@ async function extrairDadosMensagem(msg) {
   };
 }
 
+function obterQRCode() {
+  return qrCodeAtual;
+}
+
 module.exports = {
   conectarWhatsApp,
   definirHandlerMensagem,
@@ -206,4 +234,5 @@ module.exports = {
   mostrarDigitando,
   pararDigitando,
   extrairDadosMensagem,
+  obterQRCode,
 };
