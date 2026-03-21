@@ -5,35 +5,31 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
-// =============================================================
-// LIMITE DE HISTÓRICO: mantém as últimas X mensagens por cliente
-// Evita contexto enorme e custos altos de token
-// =============================================================
 const MAX_HISTORICO = 20;
 
-// Busca ou cria um cliente pelo número de telefone
+// Busca ou cria cliente
 async function buscarOuCriarCliente(telefone, nome) {
-  let { data: cliente, error } = await supabase
+  let { data: cliente } = await supabase
     .from("clientes")
     .select("*")
     .eq("telefone", telefone)
     .single();
 
   if (!cliente) {
-    const { data: novo, error: erroCriacao } = await supabase
+    const { data: novo, error } = await supabase
       .from("clientes")
-      .insert({ telefone, nome, aguardando_humano: false })
+      .insert({ telefone, nome, aguardando_humano: false, bloqueado: false })
       .select()
       .single();
-
-    if (erroCriacao) throw erroCriacao;
+    if (error) throw error;
     cliente = novo;
+    cliente._novo = true; // flag para welcome message (B8)
   }
 
   return cliente;
 }
 
-// Busca histórico de conversa de um cliente
+// Busca histórico de conversa
 async function buscarHistorico(clienteId) {
   const { data, error } = await supabase
     .from("mensagens")
@@ -46,13 +42,12 @@ async function buscarHistorico(clienteId) {
   return data || [];
 }
 
-// Salva mensagem do cliente e resposta da IA
+// Salva mensagens do cliente e do bot
 async function salvarMensagens(clienteId, mensagemUsuario, respostaBot) {
   const { error } = await supabase.from("mensagens").insert([
     { cliente_id: clienteId, role: "user", content: mensagemUsuario },
     { cliente_id: clienteId, role: "assistant", content: respostaBot },
   ]);
-
   if (error) throw error;
 }
 
@@ -63,7 +58,6 @@ async function clienteAguardandoHumano(telefone) {
     .select("aguardando_humano")
     .eq("telefone", telefone)
     .single();
-
   return data?.aguardando_humano === true;
 }
 
@@ -77,17 +71,25 @@ async function marcarParaHumano(telefone, motivo) {
       transferido_em: new Date().toISOString(),
     })
     .eq("telefone", telefone);
-
-  console.log(`[DB] Cliente ${telefone} marcado para atendimento humano: ${motivo}`);
+  console.log(`[DB] ${telefone} marcado para humano: ${motivo}`);
 }
 
-// Libera cliente de volta para o bot (chamado quando humano resolve)
+// Libera cliente de volta para o bot
 async function liberarParaBot(telefone) {
   await supabase
     .from("clientes")
+    .update({ aguardando_humano: false, motivo_transferencia: null })
+    .eq("telefone", telefone);
+}
+
+// Registra orçamento dado (C2 — follow-up)
+async function registrarOrcamento(telefone, equipamento) {
+  await supabase
+    .from("clientes")
     .update({
-      aguardando_humano: false,
-      motivo_transferencia: null,
+      orcamento_enviado_em: new Date().toISOString(),
+      equipamento_interesse: equipamento,
+      followup_enviado_em: null, // reseta para permitir novo follow-up
     })
     .eq("telefone", telefone);
 }
@@ -99,4 +101,5 @@ module.exports = {
   clienteAguardandoHumano,
   marcarParaHumano,
   liberarParaBot,
+  registrarOrcamento,
 };
