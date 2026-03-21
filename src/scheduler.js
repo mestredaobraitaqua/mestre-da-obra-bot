@@ -156,6 +156,9 @@ async function enviarFollowUps() {
         .eq("id", cliente.id);
 
       console.log(`[Scheduler] Follow-up enviado para ${cliente.telefone}`);
+
+      // Intervalo de 2 minutos entre cada follow-up para evitar detecção de spam
+      await new Promise((r) => setTimeout(r, 2 * 60 * 1000));
     }
   } catch (err) {
     console.error("[Scheduler] Erro no follow-up:", err.message);
