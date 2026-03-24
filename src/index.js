@@ -1,6 +1,6 @@
 // =============================================================
-// D3 — VALIDAÇÃO DE VARIÁVEIS DE AMBIENTE
-// Falha na inicialização em vez de falhar silenciosamente depois
+// D3 — VALIDACAO DE VARIAVEIS DE AMBIENTE
+// Falha na inicializacao em vez de falhar silenciosamente depois
 // =============================================================
 const VARS_OBRIGATORIAS = [
   "ANTHROPIC_API_KEY",
@@ -42,27 +42,65 @@ const {
   clienteAguardandoHumano,
   marcarParaHumano,
   registrarOrcamento,
+  cancelarFollowUps,
+  registrarConsulta,
 } = require("./database");
 
 const app = express();
 app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
-// Mensagem de boas-vindas para clientes novos (B8)
-const MSG_BOAS_VINDAS =
-  "Bem-vindo à Mestre da Obra Itaquaquecetuba. Sou Ana, sua atendente virtual. " +
-  "Posso ajudar com informações sobre locação de ferramentas, orçamentos e entrega. " +
-  "Como posso ajudar?";
+// =============================================================
+// DETECCAO DE DESINTERESSE — cancela follow-ups (item 18)
+// =============================================================
+const PALAVRAS_DESINTERESSE = [
+  "nao quero", "não quero", "sem interesse", "nao preciso", "não preciso",
+  "desisto", "cancela", "nao obrigado", "não obrigado", "deixa pra la",
+  "deixa pra lá", "esquece", "nao tenho interesse", "não tenho interesse",
+  "para de mandar", "pare de mandar", "nao manda mais", "não manda mais",
+];
 
-// Mensagem para tipos de mídia não suportados (B7)
+// =============================================================
+// MENSAGENS PADRAO
+// =============================================================
+
+// Boas-vindas personalizada por horario (item 16)
+function gerarBoasVindas() {
+  const hora = new Date().getHours();
+  let cumprimento;
+  if (hora >= 5 && hora < 12) cumprimento = "Bom dia";
+  else if (hora >= 12 && hora < 18) cumprimento = "Boa tarde";
+  else cumprimento = "Boa noite";
+
+  return (
+    `${cumprimento}! Sou a Ana, atendente virtual da Mestre da Obra Itaquaquecetuba. ` +
+    `Posso ajudar com locacao de ferramentas, orcamentos e entrega. ` +
+    `O que voce precisa?`
+  );
+}
+
+// Mensagem para tipos de midia nao suportados (B7)
 const MSG_MIDIA_NAO_SUPORTADA =
   "Recebi sua mensagem, mas só consigo responder a textos e áudios. " +
   "Poderia descrever o que precisa em texto?";
 
-// Mensagem de erro técnico ao cliente (B3)
+// Mensagem de erro tecnico ao cliente (B3)
 const MSG_ERRO_TECNICO =
   "Desculpe, estou com uma dificuldade técnica no momento. " +
   "Tente novamente em alguns instantes ou ligue para a loja.";
+
+// =============================================================
+// MIDDLEWARE — Token de autenticacao para rotas sensiveis (item 3)
+// Se QR_TOKEN nao configurado, rotas ficam abertas (retrocompativel)
+// =============================================================
+function verificarToken(req, res, next) {
+  const token = process.env.QR_TOKEN;
+  if (!token) return next();
+
+  if (req.query.token === token) return next();
+
+  res.status(403).json({ error: "Acesso negado. Token invalido ou ausente." });
+}
 
 // =============================================================
 // HANDLER PRINCIPAL — processa cada mensagem recebida
@@ -91,34 +129,43 @@ definirHandlerMensagem(async (msg) => {
       return;
     }
 
-    // Verifica se está aguardando atendimento humano
+    // Verifica se esta aguardando atendimento humano
     const aguardando = await clienteAguardandoHumano(de);
     if (aguardando) {
       console.log(`[Bot] ${de} aguarda humano — mensagem ignorada`);
       return;
     }
 
-    // B7 — Tipo não suportado (imagem sem texto, sticker, doc, localização)
+    // B7 — Tipo nao suportado (imagem sem texto, sticker, doc, localizacao)
     if (tipo === "nao_suportado") {
       console.log(`[Bot] ${nome} (${de}): tipo nao suportado (${dadosMensagem.tipoOriginal})`);
       await enviarMensagem(de, MSG_MIDIA_NAO_SUPORTADA);
       return;
     }
 
-    // Busca ou cria cliente
-    const cliente = await buscarOuCriarCliente(de, nome);
+    // Busca ou cria cliente (item 15 — retorno { cliente, isNovo })
+    const { cliente, isNovo } = await buscarOuCriarCliente(de, nome);
 
-    // B8 — Boas-vindas para clientes novos
-    if (cliente._novo) {
+    // B8 — Boas-vindas para clientes novos (item 16 — personalizada)
+    if (isNovo) {
       console.log(`[Bot] Novo cliente: ${nome} (${de})`);
-      await enviarMensagem(de, MSG_BOAS_VINDAS);
-      return; // aguarda a próxima mensagem para iniciar a conversa
+      await enviarMensagem(de, gerarBoasVindas());
+      return;
+    }
+
+    // Item 18 — Detecta desinteresse para cancelar follow-ups
+    if (tipo === "texto" && dadosMensagem.texto) {
+      const textoLower = dadosMensagem.texto.toLowerCase();
+      const temDesinteresse = PALAVRAS_DESINTERESSE.some((p) => textoLower.includes(p));
+      if (temDesinteresse && cliente.orcamento_enviado_em && !cliente.followup_cancelado) {
+        await cancelarFollowUps(de);
+      }
     }
 
     // B1 — Indicador "digitando..."
     await mostrarDigitando(de);
 
-    // B6 — Transcrição de áudio
+    // B6 — Transcricao de audio
     if (tipo === "audio") {
       console.log(`[Bot] ${nome} (${de}): audio recebido, transcrevendo...`);
       try {
@@ -145,7 +192,7 @@ definirHandlerMensagem(async (msg) => {
 
     console.log(`[Mensagem] ${nome} (${de}): ${textoParaIA}`);
 
-    // Busca histórico e processa com IA
+    // Busca historico e processa com IA
     const historico = await buscarHistorico(cliente.id);
     const { resposta, precisaTransferir, motivoTransferencia, orcamentoDado, equipamentoOrcamento } =
       await processarMensagem(historico, textoParaIA);
@@ -156,18 +203,35 @@ definirHandlerMensagem(async (msg) => {
     // Salva no banco
     await salvarMensagens(cliente.id, textoParaIA, resposta);
 
-    // C2 — Registra orçamento para follow-up automático
+    // C2 — Registra orcamento para follow-up automatico
     if (orcamentoDado && equipamentoOrcamento) {
       await registrarOrcamento(de, equipamentoOrcamento);
+      // Item 20 — tracking de demanda
+      await registrarConsulta(equipamentoOrcamento);
       console.log(`[Orcamento] ${de}: ${equipamentoOrcamento}`);
     }
 
     // Envia resposta
     await enviarMensagem(de, resposta);
 
-    // Transferência para humano
+    // Transferencia para humano (item 17 — aviso de horario)
     if (precisaTransferir) {
       await marcarParaHumano(de, motivoTransferencia);
+
+      // Verifica se esta fora do horario comercial
+      const agora = new Date();
+      const hora = agora.getHours();
+      const dia = agora.getDay();
+      const foraDoHorario = hora < 8 || hora >= 17 || dia === 0;
+
+      if (foraDoHorario) {
+        await enviarMensagem(
+          de,
+          "O atendimento presencial funciona de segunda a sabado, das 8h as 17h. " +
+          "Sua solicitacao foi registrada e um atendente ira retornar no proximo horario comercial."
+        );
+      }
+
       console.log(`\n========================================`);
       console.log(`TRANSFERENCIA PARA HUMANO`);
       console.log(`Cliente: ${nome} (${de})`);
@@ -189,9 +253,9 @@ definirHandlerMensagem(async (msg) => {
 });
 
 // =============================================================
-// ROTA DE SAÚDE
+// ROTAS — protegidas por token se QR_TOKEN estiver configurado (item 3)
 // =============================================================
-app.get("/", (req, res) => {
+app.get("/", verificarToken, (req, res) => {
   res.json({
     status: "online",
     app: "Mestre da Obra Bot",
@@ -199,10 +263,7 @@ app.get("/", (req, res) => {
   });
 });
 
-// =============================================================
-// ROTA QR CODE — fallback para vinculação manual
-// =============================================================
-app.get("/qr", async (req, res) => {
+app.get("/qr", verificarToken, async (req, res) => {
   const qr = obterQRCode();
   if (!qr) {
     return res.send(`<!DOCTYPE html><html><body style="font-family:sans-serif;text-align:center;padding:50px;background:#f0f0f0">
@@ -222,17 +283,19 @@ app.get("/qr", async (req, res) => {
 });
 
 // =============================================================
-// INICIALIZAÇÃO
+// INICIALIZACAO
 // =============================================================
 app.listen(PORT, () => {
   console.log("====================================");
   console.log("Mestre da Obra Bot iniciado");
   console.log(`Porta: ${PORT}`);
   console.log(`Hora: ${new Date().toLocaleString("pt-BR")}`);
+  console.log(`Token rotas: ${process.env.QR_TOKEN ? "ativo" : "DESATIVADO (rotas abertas)"}`);
+  console.log(`Alertas Telegram: ${process.env.TELEGRAM_BOT_TOKEN ? "ativo" : "desativado"}`);
   console.log("====================================");
 });
 
-// C1 + C2 — Inicia agendador de relatórios e follow-ups
+// C1 + C2 — Inicia agendador de relatorios e follow-ups
 iniciarScheduler(enviarMensagem);
 
 conectarWhatsApp().catch((err) => {

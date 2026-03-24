@@ -50,4 +50,30 @@ async function transcreverAudio(audioBuffer, mimeType = "audio/ogg") {
   }
 }
 
+// Item 8 — Cleanup periodico de arquivos temporarios de audio (a cada hora)
+const CLEANUP_INTERVAL = 60 * 60 * 1000;
+setInterval(() => {
+  try {
+    const tmpDir = os.tmpdir();
+    const files = fs.readdirSync(tmpDir);
+    const agora = Date.now();
+    let removidos = 0;
+    files.forEach((f) => {
+      if (f.startsWith("audio_") && /\.(ogg|mp4|mp3|webm)$/.test(f)) {
+        const filepath = path.join(tmpDir, f);
+        try {
+          const stats = fs.statSync(filepath);
+          if (agora - stats.mtimeMs > CLEANUP_INTERVAL) {
+            fs.unlinkSync(filepath);
+            removidos++;
+          }
+        } catch (_) {}
+      }
+    });
+    if (removidos > 0) {
+      console.log(`[Groq] Cleanup: ${removidos} arquivo(s) temporario(s) removido(s)`);
+    }
+  } catch (_) {}
+}, CLEANUP_INTERVAL);
+
 module.exports = { transcreverAudio };

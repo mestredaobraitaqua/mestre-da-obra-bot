@@ -194,56 +194,88 @@ const tabelaFrete = [
 // FUNÇÕES
 // =============================================================
 
-// Calcula orçamento de locação de ferramenta por número de dias
+// Indice por nome normalizado para busca rapida (item 12)
+const catalogIndex = new Map();
+for (const [categoria, itens] of Object.entries(catalogLocacao)) {
+  for (const item of itens) {
+    catalogIndex.set(item.nome.toLowerCase(), { ...item, categoria });
+  }
+}
+
+// Calcula orcamento com busca por score (item 11 — melhor precisao)
 function calcularOrcamento(nomeEquipamento, dias) {
+  const buscaLower = nomeEquipamento.toLowerCase();
+  const palavrasChave = buscaLower.split(" ").filter((p) => p.length > 3);
+
+  // Tenta match exato primeiro (rapido via Map)
+  const exato = catalogIndex.get(buscaLower);
+  if (exato) return calcularPreco(exato, dias);
+
+  // Busca por score
+  let melhorMatch = null;
+  let melhorScore = 0;
+
   for (const categoria of Object.values(catalogLocacao)) {
     for (const item of categoria) {
       const nomeLower = item.nome.toLowerCase();
-      const buscaLower = nomeEquipamento.toLowerCase();
-      const palavrasChave = buscaLower.split(" ").filter((p) => p.length > 3);
-      const encontrou =
-        nomeLower.includes(buscaLower) ||
-        palavrasChave.some((p) => nomeLower.includes(p));
+      let score = 0;
 
-      if (encontrou) {
-        let total = 0;
-        let detalhes = "";
-
-        if (dias >= 30) {
-          const meses = Math.floor(dias / 30);
-          const diasRestantes = dias % 30;
-          total = meses * item.mensal + diasRestantes * item.diaria;
-          detalhes = `${meses} mês(es)${diasRestantes > 0 ? ` + ${diasRestantes} dia(s) adicional(is)` : ""}`;
-        } else if (dias >= 15) {
-          const quinzenas = Math.floor(dias / 15);
-          const diasRestantes = dias % 15;
-          total = quinzenas * item.quinzenal + diasRestantes * item.diaria;
-          detalhes = `${quinzenas} quinzena(s)${diasRestantes > 0 ? ` + ${diasRestantes} dia(s) adicional(is)` : ""}`;
-        } else if (dias >= 7) {
-          const semanas = Math.floor(dias / 7);
-          const diasRestantes = dias % 7;
-          total = semanas * item.semanal + diasRestantes * item.diaria;
-          detalhes = `${semanas} semana(s)${diasRestantes > 0 ? ` + ${diasRestantes} dia(s) adicional(is)` : ""}`;
-        } else {
-          total = dias * item.diaria;
-          detalhes = `${dias} diária(s)`;
+      if (nomeLower.includes(buscaLower)) {
+        score = 80;
+      } else if (palavrasChave.length > 0) {
+        const matches = palavrasChave.filter((p) => nomeLower.includes(p)).length;
+        if (matches > 0) {
+          score = 20 + (matches / palavrasChave.length) * 40;
         }
+      }
 
-        return {
-          encontrado: true,
-          equipamento: item.nome,
-          dias,
-          detalhes,
-          total: Math.round(total * 100) / 100,
-          diaria: item.diaria,
-          semanal: item.semanal,
-          quinzenal: item.quinzenal,
-          mensal: item.mensal,
-        };
+      if (score > melhorScore) {
+        melhorScore = score;
+        melhorMatch = item;
       }
     }
   }
-  return { encontrado: false };
+
+  if (!melhorMatch) return { encontrado: false };
+  return calcularPreco(melhorMatch, dias);
+}
+
+// Calcula preco por periodo
+function calcularPreco(item, dias) {
+  let total = 0;
+  let detalhes = "";
+
+  if (dias >= 30) {
+    const meses = Math.floor(dias / 30);
+    const diasRestantes = dias % 30;
+    total = meses * item.mensal + diasRestantes * item.diaria;
+    detalhes = `${meses} mês(es)${diasRestantes > 0 ? ` + ${diasRestantes} dia(s) adicional(is)` : ""}`;
+  } else if (dias >= 15) {
+    const quinzenas = Math.floor(dias / 15);
+    const diasRestantes = dias % 15;
+    total = quinzenas * item.quinzenal + diasRestantes * item.diaria;
+    detalhes = `${quinzenas} quinzena(s)${diasRestantes > 0 ? ` + ${diasRestantes} dia(s) adicional(is)` : ""}`;
+  } else if (dias >= 7) {
+    const semanas = Math.floor(dias / 7);
+    const diasRestantes = dias % 7;
+    total = semanas * item.semanal + diasRestantes * item.diaria;
+    detalhes = `${semanas} semana(s)${diasRestantes > 0 ? ` + ${diasRestantes} dia(s) adicional(is)` : ""}`;
+  } else {
+    total = dias * item.diaria;
+    detalhes = `${dias} diária(s)`;
+  }
+
+  return {
+    encontrado: true,
+    equipamento: item.nome,
+    dias,
+    detalhes,
+    total: Math.round(total * 100) / 100,
+    diaria: item.diaria,
+    semanal: item.semanal,
+    quinzenal: item.quinzenal,
+    mensal: item.mensal,
+  };
 }
 
 // Gera texto do catálogo de locação de ferramentas para o prompt da IA

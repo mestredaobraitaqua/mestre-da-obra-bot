@@ -1,40 +1,53 @@
 // =============================================================
 // RATE LIMITING E BLOQUEIO DE CLIENTES MALICIOSOS
-// - Limite: 15 mensagens por minuto por número
-// - Bloqueio automático: acima de 30 mensagens por minuto
-// - Clientes bloqueados são registrados no banco de dados
+// - Limite: 15 mensagens por minuto por numero
+// - Bloqueio automatico: acima de 30 mensagens por minuto
+// - Clientes bloqueados sao registrados no banco de dados
+//
+// LIMITACAO CONHECIDA (item 9): contadores em memoria nao
+// sobrevivem restart do PM2. Apos restart, contadores reiniciam
+// em zero. Aceitavel para instancia unica. Cache de bloqueados
+// recarrega a cada 5 minutos (item 10).
 // =============================================================
-const { createClient } = require("@supabase/supabase-js");
+const { supabase } = require("./database"); // item 2 — cliente unico
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
-
-// Contadores em memória — suficiente para instância única
+// Contadores em memoria — suficiente para instancia unica
 const contadores = new Map();
 
 const LIMITE_AVISO = 15;      // msgs/min antes de ignorar silenciosamente
 const LIMITE_BLOQUEIO = 30;   // msgs/min para bloqueio permanente
 const JANELA_MS = 60 * 1000;  // janela de 1 minuto
 
-// Cache local de bloqueados para evitar consulta DB a cada mensagem
+// Cache local de bloqueados — recarrega a cada 5 min (item 10)
 const bloqueadosCache = new Set();
 let cacheCarregado = false;
+let ultimoReloadCache = 0;
+const CACHE_RELOAD_MS = 5 * 60 * 1000;
 
 async function carregarBloqueados() {
-  if (cacheCarregado) return;
+  const agora = Date.now();
+
+  // Recarrega se nunca carregou ou se passaram 5 minutos
+  if (cacheCarregado && (agora - ultimoReloadCache) < CACHE_RELOAD_MS) return;
+
   try {
     const { data } = await supabase
       .from("clientes")
       .select("telefone")
       .eq("bloqueado", true);
+
+    // Reconstroi o cache (permite desbloqueios manuais via Supabase)
+    bloqueadosCache.clear();
     if (data) data.forEach((c) => bloqueadosCache.add(c.telefone));
+
     cacheCarregado = true;
-  } catch (_) {}
+    ultimoReloadCache = agora;
+  } catch (err) {
+    console.error("[Rate Limit] Erro ao carregar bloqueados:", err.message);
+  }
 }
 
-// Verifica se o número pode ser atendido
+// Verifica se o numero pode ser atendido
 // Retorna: { ok: true } | { limitado: true } | { bloqueado: true, motivo }
 async function verificarRateLimit(telefone) {
   await carregarBloqueados();
@@ -56,7 +69,7 @@ async function verificarRateLimit(telefone) {
   contador.count++;
   contadores.set(telefone, contador);
 
-  // Bloqueio automático por spam
+  // Bloqueio automatico por spam
   if (contador.count > LIMITE_BLOQUEIO) {
     await bloquearCliente(telefone, `spam automático — ${contador.count} msgs em menos de 1 minuto`);
     bloqueadosCache.add(telefone);
@@ -71,7 +84,7 @@ async function verificarRateLimit(telefone) {
   return { ok: true };
 }
 
-// Bloqueia permanentemente um número
+// Bloqueia permanentemente um numero
 async function bloquearCliente(telefone, motivo) {
   console.log(`[SEGURANÇA] Bloqueando ${telefone}: ${motivo}`);
   try {

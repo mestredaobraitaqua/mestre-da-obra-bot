@@ -9,6 +9,7 @@ const { Boom } = require("@hapi/boom");
 const pino = require("pino");
 const path = require("path");
 const fs = require("fs");
+const { enviarAlertaTelegram } = require("./telegram");
 
 const SESSION_PATH = path.join(__dirname, "..", "sessions");
 
@@ -71,17 +72,27 @@ async function conectarWhatsApp() {
       const codigo = new Boom(lastDisconnect?.error)?.output?.statusCode;
       const deslogado = codigo === DisconnectReason.loggedOut;
 
+      // Alerta via Telegram sobre desconexao
+      const horaDesconexao = new Date().toLocaleString("pt-BR");
       if (deslogado) {
         console.log("[WhatsApp] Sessao invalidada pelo WhatsApp. Limpando e reconectando automaticamente...");
+        enviarAlertaTelegram(
+          `ALERTA: Bot DESCONECTOU do WhatsApp (sessao invalidada) em ${horaDesconexao}.\n` +
+          `Reconectando automaticamente. Se nao voltar em 2 min, acesse a rota /qr para reconectar.`
+        );
         try { fs.rmSync(SESSION_PATH, { recursive: true, force: true }); } catch (_) {}
         setTimeout(conectarWhatsApp, 3000);
       } else {
         console.log(`[WhatsApp] Conexao encerrada (codigo ${codigo}). Reconectando em 5s...`);
+        enviarAlertaTelegram(
+          `AVISO: Conexao WhatsApp encerrada (codigo ${codigo}) em ${horaDesconexao}. Reconectando em 5s...`
+        );
         setTimeout(conectarWhatsApp, 5000);
       }
     } else if (connection === "open") {
       qrCodeAtual = null;
       console.log("[WhatsApp] Conectado com sucesso.");
+      enviarAlertaTelegram(`Bot WhatsApp CONECTADO com sucesso em ${new Date().toLocaleString("pt-BR")}.`);
     }
   });
 
