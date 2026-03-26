@@ -3,7 +3,7 @@ const { createClient } = require("@supabase/supabase-js");
 // Cliente único exportado — usado por todos os módulos (item 2)
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
 const MAX_HISTORICO = 20;

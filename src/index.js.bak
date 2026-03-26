@@ -132,7 +132,8 @@ definirHandlerMensagem(async (msg) => {
     // Verifica se esta aguardando atendimento humano
     const aguardando = await clienteAguardandoHumano(de);
     if (aguardando) {
-      console.log("[Bot] " + de + " aguardava humano — respondendo normalmente");
+      console.log(`[Bot] ${de} aguarda humano — mensagem ignorada`);
+      return;
     }
 
     // B7 — Tipo nao suportado (imagem sem texto, sticker, doc, localizacao)
@@ -229,8 +230,6 @@ definirHandlerMensagem(async (msg) => {
           "O atendimento presencial funciona de segunda a sabado, das 8h as 17h. " +
           "Sua solicitacao foi registrada e um atendente ira retornar no proximo horario comercial."
         );
-      } else {
-        await enviarMensagem(de, "Um humano entrará em contato em breve.");
       }
 
       console.log(`\n========================================`);

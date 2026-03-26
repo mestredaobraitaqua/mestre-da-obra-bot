@@ -39,9 +39,8 @@ async function conectarWhatsApp() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  // Pair code DESABILITADO — usar apenas QR code via /qr
-  // (pair code causava conflito com QR e impedia autenticação)
-  if (false && !temSessao && !solicitandoPairCode) {
+  // Solicita pair code automaticamente quando não há sessão salva
+  if (!temSessao && !solicitandoPairCode) {
     solicitandoPairCode = true;
     setTimeout(async () => {
       try {
@@ -81,7 +80,7 @@ async function conectarWhatsApp() {
           `ALERTA: Bot DESCONECTOU do WhatsApp (sessao invalidada) em ${horaDesconexao}.\n` +
           `Reconectando automaticamente. Se nao voltar em 2 min, acesse a rota /qr para reconectar.`
         );
-        
+        try { fs.rmSync(SESSION_PATH, { recursive: true, force: true }); } catch (_) {}
         setTimeout(conectarWhatsApp, 3000);
       } else {
         console.log(`[WhatsApp] Conexao encerrada (codigo ${codigo}). Reconectando em 5s...`);
