@@ -254,6 +254,13 @@ definirHandlerMensagem(async (msg) => {
 });
 
 // =============================================================
+// =============================================================
+// HEALTH CHECK — público, sem token (usado pelo UptimeRobot)
+// =============================================================
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
 // ROTAS — protegidas por token se QR_TOKEN estiver configurado (item 3)
 // =============================================================
 app.get("/", verificarToken, (req, res) => {
