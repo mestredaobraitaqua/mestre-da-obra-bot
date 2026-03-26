@@ -230,7 +230,7 @@ definirHandlerMensagem(async (msg) => {
           "Sua solicitacao foi registrada e um atendente ira retornar no proximo horario comercial."
         );
       } else {
-        await enviarMensagem(de, "Um humano entrará em contato em breve.");
+        await enviarMensagem(de, "Nossa equipe de locações entrará em contato para finalizar seu pedido.");
       }
 
       console.log(`\n========================================`);
